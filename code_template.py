@@ -1,4 +1,7 @@
 import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import random
 import numpy as np
 import tensorflow as tf
@@ -8,7 +11,7 @@ from matplotlib import pyplot as plt
 GPU_STRING = '/gpu:0'
 BATCH_SIZE = 128
 MODEL_NAME = "experiment1"
-EPOCHS = 50
+EPOCHS = 10
 STEPS_PER_EPOCH = 10
 VALIDATION_STEPS = 32
 SEQ_LEN_PAST = 30
@@ -101,12 +104,13 @@ def setup_model_conv_1d():
 def setup_model_lstm():
   input = tf.keras.layers.Input(shape=(SEQ_LEN_PAST, NUM_INPUT_PARAMETERS), name='input')
 
-  x = tf.keras.layers.LSTM(256, return_sequences=True)(input)
-  x = tf.keras.layers.LSTM(512)(input)
+  x = tf.keras.layers.LSTM(256, use_bias=True, recurrent_initializer='glorot_uniform', return_sequences=True)(input)
+  x = tf.keras.layers.LSTM(512)(x)
   x = tf.keras.layers.Dense(SEQ_LEN_FUTURE * NUM_OUTPUT_PARAMETERS, activation='linear')(x)
   x = tf.keras.layers.Reshape((SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS))(x)
 
-  model = tf.keras.models.Model(input, x)
+  model = tf.keras.models.Model(inputs=input, outputs=x)
+
   return model  
 
 
@@ -353,16 +357,18 @@ def run():
       os.makedirs(model_path)
 
 
+  
     model = setup_model_mlp()
     train(data_path, model_path, model)
     save_loss_png("D:/uni/bsNeuro/models/experiment1/vis/loss.png", "D:/uni/bsNeuro/", "loss_mlp_50Epochs")
     print("\n\n\n [INFO]: FINISHED MLP \n [INFO]: Starting Transfromer \n\n\n")
   
-
+    '''
     model = setup_model_transformer()
     train(data_path, model_path, model)
     save_loss_png("D:/uni/bsNeuro/models/experiment1/vis/loss.png", "D:/uni/bsNeuro/", "loss_transformer_50Epochs")
     print("\n\n\n [INFO]: FINISHED Transfromer \n [INFO]: Starting lstm \n\n\n")
+    '''
 
     model = setup_model_lstm()
     train(data_path, model_path, model)
