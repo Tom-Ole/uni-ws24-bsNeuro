@@ -56,18 +56,16 @@ def data_generator(path, batch_size):
     while True:
         inputs, labels = select_data(batch_size, all_files)
 
-        # Data Augmentation: Add Gaussian noise to inputs
         mu = 0
         sigma = 0.1
         rnd = np.random.normal(mu, sigma, size=inputs.shape)
-        inputs = inputs + rnd  # Avoid modifying original data in place
+        inputs = inputs + rnd 
 
         # Convert to PyTorch tensors
         inputs = torch.tensor(inputs, dtype=torch.float32)
         labels = torch.tensor(labels, dtype=torch.float32)
 
-        # Ensure the input tensor has the correct shape: (batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS)
-        inputs = inputs.view(batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS)  # Flatten input to correct shape
+        inputs = inputs.view(batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS) 
 
         yield inputs, labels
 
@@ -75,6 +73,7 @@ class MLP(nn.Module):
     def __init__(self, seq_len_past, num_input_parameters, seq_len_future, num_output_parameters, dropout_prob=0.4):
         super(MLP, self).__init__()
 
+        # TODO: Make it dynamic
         self.flatten = nn.Flatten()
         self.dense1 = nn.Linear(seq_len_past * num_input_parameters, 1024)
         self.dropout1 = nn.Dropout(dropout_prob)
@@ -142,7 +141,7 @@ def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_
 
         model.eval()
 
-        # Optionally, validate the model
+        # validate the model
         validate_loss = 0.0
         for _ in range(steps_per_epoch):
             inputs, labels = next(validation_gen)
@@ -159,17 +158,17 @@ def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_
         validate_loss_history.append(validate_loss)
         print(f"Epoch {epoch + 1}, Validation Loss: {validate_loss:.4f}")
 
-        save_history_as_image_plot(train_loss_history, validate_loss_history)
+        save_history_as_image_plot(train_loss_history, validate_loss_history, f"loss_{type(model).__name__}_{epochs}")
 
 
-def save_history_as_image_plot(train_loss_history, validate_loss_history):
+def save_history_as_image_plot(train_loss_history, validate_loss_history, name):
     plt.plot(train_loss_history, label='Train Loss')
     plt.plot(validate_loss_history, label='Validation Loss')
     plt.title("Training and Validation Loss History")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig("training_loss_history.png")
+    plt.savefig(f"{name}.png")
     plt.close()
 
 
@@ -180,11 +179,11 @@ def main():
     steps_per_epoch = STEPS_PER_EPOCH
 
 
-    model = MLP(SEQ_LEN_PAST, NUM_INPUT_PARAMETERS, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
+    model_mlp = MLP(SEQ_LEN_PAST, NUM_INPUT_PARAMETERS, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model_mlp.parameters(), lr=0.001)
 
-    train_model(model, data_path, epochs, steps_per_epoch, batch_size, optimizer, criterion)
+    train_model(model_mlp, data_path, epochs, steps_per_epoch, batch_size, optimizer, criterion)
 
 
 if __name__ == "__main__":
