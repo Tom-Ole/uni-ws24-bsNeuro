@@ -73,19 +73,19 @@ class MLP(nn.Module):
     def __init__(self, seq_len_past, num_input_parameters, seq_len_future, num_output_parameters, dropout_prob=0.4):
         super(MLP, self).__init__()
 
-        # TODO: Make it dynamic
+        # TODO: Make it dynamic and fix parameters and create conv net
         self.flatten = nn.Flatten()
-        self.dense1 = nn.Linear(seq_len_past * num_input_parameters, 1024)
+        self.dense1 = nn.Linear(seq_len_past * num_input_parameters, 128)
         self.dropout1 = nn.Dropout(dropout_prob)
-        self.dense2 = nn.Linear(1024, 1024)
+        self.dense2 = nn.Linear(128, 128)
         self.dropout2 = nn.Dropout(dropout_prob)
-        self.dense3 = nn.Linear(1024, 1024)
+        self.dense3 = nn.Linear(128, 64)
         self.dropout3 = nn.Dropout(dropout_prob)
-        self.dense4 = nn.Linear(1024, 128)
+        self.dense4 = nn.Linear(64, 64)
         self.dropout4 = nn.Dropout(dropout_prob)
-        self.dense5 = nn.Linear(128, 128)
+        self.dense5 = nn.Linear(64, 64)
         self.dropout5 = nn.Dropout(dropout_prob)
-        self.dense6 = nn.Linear(128, seq_len_future * num_output_parameters)
+        self.dense6 = nn.Linear(64, seq_len_future * num_output_parameters)
         
         self.seq_len_future = seq_len_future
         self.num_output_parameters = num_output_parameters
@@ -107,7 +107,7 @@ class MLP(nn.Module):
         x = x.view(-1, self.seq_len_future, self.num_output_parameters)
         return x
 
-def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_size: int, optimizer, criterion):
+def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_size: int, optimizer, loss_fn):
     train_gen = data_generator(data_path + "/train/", batch_size)
     validation_gen = data_generator(data_path + "/val/", batch_size)
 
@@ -127,7 +127,7 @@ def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_
             # Reshape labels to match the shape of predictions: (batch_size, seq_len_future, num_output_parameters)
             labels = labels.view(labels.size(0), SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
 
-            loss = criterion(predictions, labels)
+            loss = loss_fn(predictions, labels)
 
             loss.backward()
             optimizer.step()
@@ -151,7 +151,7 @@ def train_model(model, data_path: str, epochs: int, steps_per_epoch: int, batch_
                 # Reshape labels to match the shape of predictions: (batch_size, seq_len_future, num_output_parameters)
                 labels = labels.view(labels.size(0), SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
 
-                loss = criterion(predictions, labels)
+                loss = loss_fn(predictions, labels)
                 validate_loss += loss.item()
 
         validate_loss /= steps_per_epoch
@@ -180,10 +180,10 @@ def main():
 
 
     model_mlp = MLP(SEQ_LEN_PAST, NUM_INPUT_PARAMETERS, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model_mlp.parameters(), lr=0.001)
+    loss_fn = nn.MSELoss()
+    optimizer = optim.Adam(model_mlp.parameters(), lr=0.0001)
 
-    train_model(model_mlp, data_path, epochs, steps_per_epoch, batch_size, optimizer, criterion)
+    train_model(model_mlp, data_path, epochs, steps_per_epoch, batch_size, optimizer, loss_fn)
 
 
 if __name__ == "__main__":
