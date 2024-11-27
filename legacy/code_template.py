@@ -318,7 +318,6 @@ def train(data_path, model_path, model, from_checkpoint=False):
 
   model_history_callback = ModelHistory(model_path)
 
-  # dont know yet
   checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(model_path + 'model-{epoch:03d}.keras', verbose=1, monitor='val_mae', save_best_only=True, mode='auto')
   
   # saves each epoch as a checkpoint
