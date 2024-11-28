@@ -9,11 +9,11 @@ import matplotlib.pyplot as plt
 
 SEQ_LEN_PAST = 30
 SEQ_LEN_FUTURE = 3
-HIDDEN_SIZE = 1024
+HIDDEN_SIZE = 64
 
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EPOCHS = 100
-STEPS_PER_EPOCH = 10
+STEPS_PER_EPOCH = 20
 
 VALIDATION_STEPS = 32
 
@@ -67,7 +67,11 @@ def data_generator(path, batch_size):
         inputs = torch.tensor(inputs, dtype=torch.float32)
         labels = torch.tensor(labels, dtype=torch.float32)
 
-        inputs = inputs.view(batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS) 
+        #MLP
+        #inputs = inputs.view(batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS) 
+
+        #Conv1d
+        inputs = inputs.view(batch_size, NUM_INPUT_PARAMETERS, SEQ_LEN_PAST) 
 
         yield inputs, labels
 
@@ -78,7 +82,7 @@ def save_loss_history_as_image_plot(train_loss_history, validate_loss_history, n
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(f"{name}.png")
+    plt.savefig(f"./loss/{name}.png")
     plt.close()
 
 def save_prediction_as_plot(inputs, labels, predictions, name):
@@ -91,6 +95,7 @@ def save_prediction_as_plot(inputs, labels, predictions, name):
     plt.legend()
     plt.savefig(f"./prediction/{name}.png")
     plt.close()
+
 
 
 class own_MLP(nn.Module):
@@ -112,6 +117,37 @@ class own_MLP(nn.Module):
         x = self.outputLayout(x)
         return x
     
+class own_Conv1d(nn.Module):
+    def __init__(self):
+        super(own_Conv1d, self).__init__()
+        self.inputLayer = nn.Conv1d(NUM_INPUT_PARAMETERS, HIDDEN_SIZE, kernel_size=3)
+        self.convLayer1 = nn.Conv1d(HIDDEN_SIZE, HIDDEN_SIZE, kernel_size=3)
+        self.convLayer2 = nn.Conv1d(HIDDEN_SIZE, HIDDEN_SIZE, kernel_size=3)
+        self.pooling = nn.AvgPool1d(kernel_size=2)
+        self.Dropout = nn.Dropout(0.3)
+
+        reduced_seq_length = (SEQ_LEN_PAST - 6) // 2
+        self.denseLayer = nn.Linear(HIDDEN_SIZE * reduced_seq_length, HIDDEN_SIZE)
+        self.outputLayout = nn.Linear(HIDDEN_SIZE, SEQ_LEN_FUTURE * NUM_OUTPUT_PARAMETERS)
+
+    def forward(self, x):
+        x = torch.relu(self.inputLayer(x))
+        x = self.Dropout(x)
+        x = torch.relu(self.convLayer1(x))
+        x = self.Dropout(x)
+        x = torch.relu(self.convLayer2(x))
+        x = self.Dropout(x)
+
+        x = self.pooling(x)
+        x = torch.flatten(x, start_dim=1)
+
+        x = torch.relu(self.denseLayer(x))
+        x = self.outputLayout(x)
+
+        return x
+
+
+
 def train_model(model, loss_fn, optimizer, data_path: str):
     train_data = data_generator(data_path + "/train/", BATCH_SIZE)
     val_data = data_generator(data_path + "/val/", BATCH_SIZE)
@@ -157,6 +193,7 @@ def main():
     data_path = "./datasets/sin_data/"
 
     model = own_MLP()
+    #model = own_Conv1d()
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
