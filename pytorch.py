@@ -8,13 +8,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import os
 
-SEQ_LEN_PAST = 25
+SEQ_LEN_PAST = 30
 SEQ_LEN_FUTURE = 3
-HIDDEN_SIZE = 1024
+HIDDEN_SIZE = 128
 
-BATCH_SIZE = 512
-EPOCHS = 500
-STEPS_PER_EPOCH = 30
+BATCH_SIZE = 64
+EPOCHS = 50
+STEPS_PER_EPOCH = 10
 
 VALIDATION_STEPS = 32
 
@@ -104,7 +104,7 @@ def plot_partial(samples, sub_seq_input, sub_seq_label, sub_seq_pred, epoch, sav
 
     input_indices = list(range(len(input_samples_y)))
     label_indices = list(range(len(input_samples_y), len(input_samples_y) + len(label_samples_y)))
-    pred_indices = label_indices  # Predictions align with ground truth labels
+    pred_indices = label_indices 
 
     plt.figure(figsize=(10, 6))
     plt.scatter(input_indices, input_samples_y, label="Input (Past)", color='blue')
@@ -119,9 +119,50 @@ def plot_partial(samples, sub_seq_input, sub_seq_label, sub_seq_pred, epoch, sav
     plt.savefig(plot_file)
     plt.close()
 
-def plot_unrolled(samples, sub_seq_input, sub_seq_label, sub_seq_pred, epoch, save_dir):
-    # Ignore it for now
-    return
+def plot_unrolled(samples, model, epoch, save_dir):
+    save_path = os.path.join(f"./prediction/{save_dir}/unrolled")
+    os.makedirs(save_path, exist_ok=True)
+
+    rolling_buffer = samples[0:SEQ_LEN_PAST]
+    initial_samples = rolling_buffer.copy()
+
+    num_steps = 300  
+
+    pred_samples = []
+    for i in range(num_steps):
+        input_seq = np.expand_dims(np.asarray(rolling_buffer), axis=0)        
+
+        input_tensor = torch.tensor(input_seq, dtype=torch.float32).to(next(model.parameters()).device)
+        input_tensor = model.preprocess_input(input_tensor)
+        preds = model(input_tensor).detach().cpu().numpy()
+        preds = preds.astype(np.float32)
+
+        pred_samples.append((preds[0][0],))
+        rolling_buffer.append((preds[0][0],))
+
+        rolling_buffer = rolling_buffer[1:]
+
+    y_pred = [pred[0] for pred in pred_samples]
+    y_initial = [sample[0] for sample in initial_samples]
+    y_samples = [sample[0] for sample in samples]
+
+    tmp1 = list(range(0, len(y_samples)))
+    tmp2 = list(range(0, len(y_initial)))
+    tmp3 = list(range(len(y_initial), len(y_pred)+len(y_initial))) 
+
+    plt.figure(figsize=(10, 6))
+    plt.scatter(tmp1, y_samples, label="Ground Truth", color='blue')
+    plt.scatter(tmp2, y_initial, label="Initial Samples", color='green')
+    plt.scatter(tmp3, y_pred, label="Predictions", color='orange')
+    plt.title(f"Unrolled Prediction (Epoch: {epoch})")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.legend(loc="upper left")
+    plt.grid(True)
+    plot_file = os.path.join(save_path, f"unrolled_plot_epoch_{epoch}.png")
+    plt.savefig(plot_file)
+    plt.close()
+
 
 def val_plot_checkpoint(model, SEQ_LEN_PAST, SEQ_LEN_FUTURE, save_dir, epoch):
 
@@ -148,7 +189,7 @@ def val_plot_checkpoint(model, SEQ_LEN_PAST, SEQ_LEN_FUTURE, save_dir, epoch):
         preds = preds.astype(np.float32)
 
         plot_partial(samples, sub_seq_input, sub_seq_label, preds, epoch, save_dir)
-        #plot_unrolled(samples, sub_seq_input, sub_seq_label, preds, i, save_name)
+        plot_unrolled(samples, model, epoch, save_dir)
 
 
 
