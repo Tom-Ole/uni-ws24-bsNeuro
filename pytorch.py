@@ -6,14 +6,15 @@ import random
 import glob
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import os
 
-SEQ_LEN_PAST = 30
+SEQ_LEN_PAST = 25
 SEQ_LEN_FUTURE = 3
-HIDDEN_SIZE = 64
+HIDDEN_SIZE = 1024
 
-BATCH_SIZE = 64
-EPOCHS = 100
-STEPS_PER_EPOCH = 20
+BATCH_SIZE = 512
+EPOCHS = 500
+STEPS_PER_EPOCH = 30
 
 VALIDATION_STEPS = 32
 
@@ -48,7 +49,7 @@ def select_data(batch_size, all_files):
         num += 1
     return np.asarray(selected_inputs), np.asarray(selected_labels)
 
-def data_generator(path, batch_size):
+def data_generator(path, batch_size, model, device):
     all_files = sorted(glob.glob(path + '*.txt'))
     print(f"Found {len(all_files)} files in {path}")
 
@@ -64,37 +65,90 @@ def data_generator(path, batch_size):
         inputs = inputs + rnd 
 
         # Convert to PyTorch tensors
-        inputs = torch.tensor(inputs, dtype=torch.float32)
-        labels = torch.tensor(labels, dtype=torch.float32)
+        inputs = torch.tensor(inputs, dtype=torch.float32).to(device)
+        labels = torch.tensor(labels, dtype=torch.float32).to(device)
 
-        #MLP
-        #inputs = inputs.view(batch_size, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS) 
-
-        #Conv1d
-        inputs = inputs.view(batch_size, NUM_INPUT_PARAMETERS, SEQ_LEN_PAST) 
+        inputs = model.preprocess_input(inputs)
 
         yield inputs, labels
 
-def save_loss_history_as_image_plot(train_loss_history, validate_loss_history, name):
+def save_loss_history_as_image_plot(train_loss_history, validate_loss_history, save_dir):
+    save_path = os.path.join(f"./prediction/{save_dir}/loss")
+    os.makedirs(save_path, exist_ok=True)
+
+
+    min_loss = min(min(train_loss_history), min(validate_loss_history))
+    max_loss = max(max(train_loss_history), max(validate_loss_history))
+    margin = 0.1 * (max_loss - min_loss)  # Add 10% margin
+    ylim = (min_loss - margin, max_loss + margin)
+
+
     plt.plot(train_loss_history, label='Train Loss')
     plt.plot(validate_loss_history, label='Validation Loss')
     plt.title("Training and Validation Loss History")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(f"./loss/{name}.png")
+    plt.ylim(ylim)
+    plot_file = os.path.join(save_path, f"loss.png")
+    plt.savefig(plot_file)
     plt.close()
 
-def save_prediction_as_plot(inputs, labels, predictions, name):
-    plt.scatter(range(len(inputs)), inputs, label='Input', color='blue', s=10)  # Punkte für Input
-    plt.scatter(range(len(inputs), len(inputs) + len(labels)), labels, label='Ground Truth', color='orange', s=10)  # Punkte für Ground Truth
-    plt.scatter(range(len(inputs), len(inputs) + len(predictions)), predictions, label='Prediction', color='green', s=10)  # Punkte für Prediction
-    plt.title("Prediction")
-    plt.xlabel("Time")
+def plot_partial(samples, sub_seq_input, sub_seq_label, sub_seq_pred, epoch, save_dir):
+    save_path = os.path.join(f"./prediction/{save_dir}/partial")
+    os.makedirs(save_path, exist_ok=True)
+
+    input_samples_y = [point[0] for point in sub_seq_input]
+    label_samples_y = [point[0] for point in sub_seq_label]
+    pred_samples_y = [point[0] for point in sub_seq_pred]
+
+    input_indices = list(range(len(input_samples_y)))
+    label_indices = list(range(len(input_samples_y), len(input_samples_y) + len(label_samples_y)))
+    pred_indices = label_indices  # Predictions align with ground truth labels
+
+    plt.figure(figsize=(10, 6))
+    plt.scatter(input_indices, input_samples_y, label="Input (Past)", color='blue')
+    plt.scatter(pred_indices, pred_samples_y, label="Prediction (Future)", color='orange')
+    plt.scatter(label_indices, label_samples_y, label="Ground Truth (Future)", color='green')
+    plt.title(f"Prediction vs Ground Truth (Epoch: {epoch})")
+    plt.xlabel("Time Step")
     plt.ylabel("Value")
-    plt.legend()
-    plt.savefig(f"./prediction/{name}.png")
+    plt.legend(loc="upper left")
+    plt.grid(True)
+    plot_file = os.path.join(save_path, f"partial_plot_epoch_{epoch}.png")
+    plt.savefig(plot_file)
     plt.close()
+
+def plot_unrolled(samples, sub_seq_input, sub_seq_label, sub_seq_pred, epoch, save_dir):
+    # Ignore it for now
+    return
+
+def val_plot_checkpoint(model, SEQ_LEN_PAST, SEQ_LEN_FUTURE, save_dir, epoch):
+
+    all_files = sorted(glob.glob("./datasets/sin_data/val/*.txt"))
+
+    num_plots = 1
+
+    for i in range(num_plots):
+        idx_file = random.randint(0, len(all_files) - 1)
+        samples = parse_file(all_files[idx_file])
+        idx_seq = random.randint(SEQ_LEN_PAST, len(samples) - SEQ_LEN_FUTURE)
+
+        sub_req_input = samples[idx_seq - SEQ_LEN_PAST:idx_seq]
+        sub_seq_label = samples[idx_seq:idx_seq + SEQ_LEN_FUTURE]
+
+        sub_seq_input = np.asarray(sub_req_input)
+        sub_seq_label = np.asarray(sub_seq_label)
+
+        input_tensor = torch.tensor(sub_seq_input, dtype=torch.float32).to(next(model.parameters()).device)
+        input_tensor = model.preprocess_input(input_tensor)
+
+        preds = model(input_tensor).detach().cpu().numpy().reshape(SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
+        
+        preds = preds.astype(np.float32)
+
+        plot_partial(samples, sub_seq_input, sub_seq_label, preds, epoch, save_dir)
+        #plot_unrolled(samples, sub_seq_input, sub_seq_label, preds, i, save_name)
 
 
 
@@ -116,6 +170,9 @@ class own_MLP(nn.Module):
         x = self.dropout(x)
         x = self.outputLayout(x)
         return x
+    
+    def preprocess_input(self, x):
+        return x.view(-1, SEQ_LEN_PAST * NUM_INPUT_PARAMETERS) 
     
 class own_Conv1d(nn.Module):
     def __init__(self):
@@ -143,14 +200,16 @@ class own_Conv1d(nn.Module):
 
         x = torch.relu(self.denseLayer(x))
         x = self.outputLayout(x)
-
         return x
+    
+    def preprocess_input(self, x):
+        return x.view(-1, NUM_INPUT_PARAMETERS, SEQ_LEN_PAST)
 
 
 
-def train_model(model, loss_fn, optimizer, data_path: str):
-    train_data = data_generator(data_path + "/train/", BATCH_SIZE)
-    val_data = data_generator(data_path + "/val/", BATCH_SIZE)
+def train_model(model, loss_fn, optimizer, data_path: str, device):
+    train_data = data_generator(data_path + "/train/", BATCH_SIZE, model, device)
+    val_data = data_generator(data_path + "/val/", BATCH_SIZE, model, device)
 
     train_loss_history = []
     validate_loss_history = []
@@ -170,7 +229,7 @@ def train_model(model, loss_fn, optimizer, data_path: str):
             train_loss += loss.item()
         train_loss_history.append(train_loss / STEPS_PER_EPOCH)
 
-        save_prediction_as_plot(inputs[0].view(SEQ_LEN_PAST).detach().numpy(), labels[0].view(SEQ_LEN_FUTURE).detach().numpy(), outputs[0].view(SEQ_LEN_FUTURE).detach().numpy(), f"prediction_{epoch + 1}_{name}")
+        val_plot_checkpoint(model, SEQ_LEN_PAST, SEQ_LEN_FUTURE, name, epoch)
 
         model.eval()
         val_loss = 0
@@ -184,20 +243,25 @@ def train_model(model, loss_fn, optimizer, data_path: str):
         print(f"Epoch {epoch + 1}/{EPOCHS} - Train Loss: {train_loss_history[-1]} - Validation Loss: {validate_loss_history[-1]}")
 
 
-        save_loss_history_as_image_plot(train_loss_history, validate_loss_history, f"loss_history_{name}")
+        save_loss_history_as_image_plot(train_loss_history, validate_loss_history, name)
 
     return
 
 def main():
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     data_path = "./datasets/sin_data/"
+
 
     model = own_MLP()
     #model = own_Conv1d()
+    model = model.to(device)
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    train_model(model, loss_fn, optimizer, data_path)
+    train_model(model, loss_fn, optimizer, data_path, device)
 
 if __name__ == "__main__":
     main()
