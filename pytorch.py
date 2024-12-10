@@ -246,6 +246,39 @@ class own_Conv1d(nn.Module):
     def preprocess_input(self, x):
         return x.view(-1, NUM_INPUT_PARAMETERS, SEQ_LEN_PAST)
 
+class own_LSTM(nn.Module):
+    def __init__(self):
+        super(own_LSTM, self).__init__()
+        self.inputLayer = nn.LSTM(NUM_INPUT_PARAMETERS, HIDDEN_SIZE, batch_first=True, bias=True)
+        self.lstmLayer1 = nn.LSTM(HIDDEN_SIZE, HIDDEN_SIZE, batch_first=True, bias=True)
+        self.outputLayer = nn.Linear(HIDDEN_SIZE, SEQ_LEN_FUTURE * NUM_OUTPUT_PARAMETERS)
+
+    def forward(self, x):
+        # Pass through the first LSTM layer
+        x, _ = self.inputLayer(x)
+        print(f"After inputLayer: {x.shape}")  # Debug print
+        
+        # Pass through the second LSTM layer
+        x, _ = self.lstmLayer1(x)
+        print(f"After lstmLayer1: {x.shape}")  # Debug print
+        
+        # Pass through the final linear layer
+        # Only use the last output (hidden state at the last time step)
+        x = x[:, -1, :]  # Select the last time step output
+        print(f"After selecting last time step: {x.shape}")  # Debug print
+        
+        x = self.outputLayer(x)
+        print(f"After outputLayer: {x.shape}")  # Debug print
+
+        # Reshape the output to match the expected label shape
+        batch_size = x.size(0)
+        x = x.view(batch_size, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS)
+        print(f"Final reshaped output: {x.shape}")  # Debug print
+
+        return x
+
+    def preprocess_input(self, x):
+        return x.view(-1, SEQ_LEN_PAST, NUM_INPUT_PARAMETERS)
 
 
 def train_model(model, loss_fn, optimizer, data_path: str, device):
@@ -264,7 +297,11 @@ def train_model(model, loss_fn, optimizer, data_path: str, device):
             inputs, labels = next(train_data)
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = loss_fn(outputs, labels.view(BATCH_SIZE, SEQ_LEN_FUTURE * NUM_OUTPUT_PARAMETERS))
+            print("\n\n")
+            print(f"outputs shape: {outputs.shape}")
+            print(f"labels shape: {labels.shape}")
+            print("\n\n")
+            loss = loss_fn(outputs, labels.view(-1, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS))
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -277,7 +314,7 @@ def train_model(model, loss_fn, optimizer, data_path: str, device):
         for step in range(VALIDATION_STEPS):
             inputs, labels = next(val_data)
             outputs = model(inputs)
-            loss = loss_fn(outputs, labels.view(BATCH_SIZE, SEQ_LEN_FUTURE * NUM_OUTPUT_PARAMETERS))
+            loss = loss_fn(outputs, labels.view(-1, SEQ_LEN_FUTURE, NUM_OUTPUT_PARAMETERS))
             val_loss += loss.item()
         validate_loss_history.append(val_loss / VALIDATION_STEPS)
 
@@ -296,8 +333,10 @@ def main():
     data_path = "./datasets/sin_data/"
 
 
-    model = own_MLP()
-    #model = own_Conv1d()
+    # model = own_MLP()
+    # model = own_Conv1d()
+    model = own_LSTM()
+
     model = model.to(device)
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
