@@ -21,29 +21,25 @@ def read_data(file_path: str) -> pd.DataFrame:
     """Reads the CSV file into a pandas DataFrame."""
     return pd.read_csv(file_path)
 
-def prepare_sequences(data: pd.DataFrame, seq_len_past: int, seq_len_future: int):
+def prepare_sequence(data: pd.DataFrame, seq_len_past: int, seq_len_future: int):
     """Creates sequences of past and future data for training."""
-    sequences = []
-    labels = []
-    for i in range(seq_len_past, len(data) - seq_len_future):
-        input_seq = data.iloc[i - seq_len_past:i].values
-        output_seq = data.iloc[i:i + seq_len_future].values
-        sequences.append(input_seq)
-        labels.append(output_seq)
-    return np.array(sequences), np.array(labels)
+    i = np.random.randint(seq_len_past, len(data) - seq_len_future)
 
-def data_generator(sequences, labels, batch_size, device, randomize=True):
-    """Yields batches of data for training."""
-    indices = np.arange(len(sequences))
+    input_seq = data.iloc[i - seq_len_past:i].values
+    output_seq = data.iloc[i:i + seq_len_future].values
+
+    return input_seq, output_seq
+
+def data_generator(data, batch_size, device):
+    """ Generates batches of data for training and/or validataion."""
     while True:
-        if randomize:
-            np.random.shuffle(indices)
-        
-        for i in range(0, len(indices), batch_size):
-            batch_idx = indices[i:i + batch_size]
-            input_batch = torch.tensor(sequences[batch_idx], dtype=torch.float32).to(device)
-            label_batch = torch.tensor(labels[batch_idx], dtype=torch.float32).to(device)
-            yield input_batch, label_batch
+
+        input, label = prepare_sequence(data, SEQ_LEN_PAST, SEQ_LEN_FUTURE)
+
+        input_tensor = torch.tensor(input, dtype=torch.float32).to(device)
+        label_tensor = torch.tensor(label, dtype=torch.float32).to(device)
+
+        yield input_tensor, label_tensor
 
 def test_data_generator(data, device):
     """Returns one batch of data and the label for testing the prediction of the model"""
@@ -56,7 +52,6 @@ def test_data_generator(data, device):
     sequences = sequences.values
     input_batch = torch.tensor(sequences, dtype=torch.float32).to(device)
     return input_batch, labels_with_date
-
 
 
 # Plotting
@@ -144,7 +139,6 @@ class own_MLP(nn.Module):
         self.dropout = nn.Dropout(self.dp)
 
     def forward(self, x):
-        x = x.reshape(x.size(0), -1)  # Flatten input
         for i in range(len(self.fc_layers) - 1):
             x = self.fc_layers[i](x)
             x = torch.relu(x)
@@ -152,66 +146,52 @@ class own_MLP(nn.Module):
         x = self.fc_layers[-1](x)
         return x
 
+
 # Training
-def train(model, loss_fn, optimizer, device, sequences, labels, raw_data):
+def train(model, loss_fn, optimizer, device, data, val_data, raw_data):
     """Train the model."""
     train_loss_history = []
     val_loss_history = []
 
-    # Split data into train and validation
-    split_idx = int(0.8 * len(sequences))
-    train_sequences = sequences[:split_idx]
-    val_sequences = sequences[split_idx:]
-    train_labels = labels[:split_idx]
-    val_labels = labels[split_idx:]
+
+    train_data_gen = data_generator(data, BATCH_SIZE, device)
+    val_data_gen = data_generator(val_data, BATCH_SIZE, device)
 
     for epoch in range(EPOCHS):
         model.train()
-        train_gen = data_generator(train_sequences, train_labels, BATCH_SIZE, device)
         train_loss = 0
 
         for _ in tqdm(range(STEPS_PER_EPOCH)):
-            input_batch, label_batch = next(train_gen)
-            label_batch = label_batch.view(label_batch.size(0), -1)  # Flatten labels
+            inputs, labels = next(train_data_gen)
             optimizer.zero_grad()
-            output = model(input_batch)
-            loss = loss_fn(output, label_batch)
+            print(f"\n\n\n {inputs.shape} \n\n\n")
+            output = model(inputs)
+            loss = loss_fn(output, labels)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
 
-        train_loss /= len(train_sequences) // BATCH_SIZE
-        train_loss_history.append(train_loss)
+        train_loss_history.append(train_loss / STEPS_PER_EPOCH)
+
+        #Val_plot
+        #plot_seq(label_with_date, prediction, "./plots", f"pred_epoch_{epoch}.png")
 
         # Validation
         model.eval()
-        val_gen = data_generator(val_sequences, val_labels, BATCH_SIZE, device, randomize=False)
         val_loss = 0
-        with torch.no_grad():
-            for input_batch, label_batch in val_gen:
-                label_batch = label_batch.view(label_batch.size(0), -1)
-                output = model(input_batch)
-                loss = loss_fn(output, label_batch)
-                val_loss += loss.item()
-        val_loss /= len(val_sequences) // BATCH_SIZE
-        val_loss_history.append(val_loss)
+        for _ in range(STEPS_PER_EPOCH):
+            inputs, labels = next(val_data_gen)
+            output = model(inputs)
+            loss = loss_fn(output, labels)
+            val_loss += loss.item()
+        val_loss_history.append(val_loss / STEPS_PER_EPOCH)
 
         print(f"Epoch {epoch + 1}/{EPOCHS} - Train Loss: {train_loss:.4f} - Validation Loss: {val_loss:.4f}")
 
-        # Test the model
-        test_seq, label_with_date = test_data_generator(raw_data, device)
-        #print("======", test_seq.shape) # (200, 6) => wrong shape it should be (BATCH_SIZE, 200, 6)
-        #print("======", label_with_date.shape) # (203, 7) => right
-        test_seq = test_seq.unsqueeze(0) # Add batch dimension
-        prediction = model(test_seq).detach().cpu().numpy().reshape(-1, NUM_INPUTS)
-
-        #print(prediction.shape)
-
-        plot_seq(label_with_date, prediction, "./plots", f"pred_epoch_{epoch}.png")
+        # Plot loss curves
+        plot_loss(train_loss_history, val_loss_history, "./plots")
 
 
-    # Plot loss curves
-    plot_loss(train_loss_history, val_loss_history, "./plots")
 
 # Main Function
 def main():
@@ -220,12 +200,14 @@ def main():
 
     # Read and prepare data
     raw_data = read_data(DATA_PATH)
-    raw_opt_data = raw_data.drop(columns=["Date"])  # Exclude the Date column
-    raw_opt_data = raw_opt_data.apply(pd.to_numeric, errors='coerce').dropna()  # Ensure numeric and drop NaNs
+    data = raw_data.drop(columns=["Date"])  # Exclude the Date column
+    data = data.apply(pd.to_numeric, errors='coerce').dropna()  # Ensure numeric and drop NaNs
 
-    sequences, labels = prepare_sequences(raw_opt_data, SEQ_LEN_PAST, SEQ_LEN_FUTURE)
+    # split data into train and validation
+    split_pct = 0.8
+    train_data = data.iloc[:int(len(data) * split_pct)]
+    val_data = data.iloc[int(len(data) * split_pct):]
 
-    print("\n\n\n", len(sequences))
 
     # Initialize model, loss, and optimizer
     model = own_MLP(layer=[256, 128, 64]).to(device)
@@ -233,7 +215,8 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # Train the model
-    train(model, loss_fn, optimizer, device, sequences, labels, raw_data)
+    train(model, loss_fn, optimizer, device, train_data, val_data, raw_data)
+
 
 if __name__ == "__main__":
     main()
