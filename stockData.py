@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 DATA_PATH = "./data/AAPL.csv"
 SEQ_LEN_PAST = 200
 SEQ_LEN_FUTURE = 3
-BATCH_SIZE = 64
-EPOCHS = 50
+BATCH_SIZE = 256
+EPOCHS = 100
+STEPS_PER_EPOCH = 100
 NUM_INPUTS = 6
 
 # Data Preparation
@@ -34,13 +35,29 @@ def prepare_sequences(data: pd.DataFrame, seq_len_past: int, seq_len_future: int
 def data_generator(sequences, labels, batch_size, device, randomize=True):
     """Yields batches of data for training."""
     indices = np.arange(len(sequences))
-    if randomize:
-        np.random.shuffle(indices)
-    for i in range(0, len(indices), batch_size):
-        batch_idx = indices[i:i + batch_size]
-        input_batch = torch.tensor(sequences[batch_idx], dtype=torch.float32).to(device)
-        label_batch = torch.tensor(labels[batch_idx], dtype=torch.float32).to(device)
-        yield input_batch, label_batch
+    while True:
+        if randomize:
+            np.random.shuffle(indices)
+        
+        for i in range(0, len(indices), batch_size):
+            batch_idx = indices[i:i + batch_size]
+            input_batch = torch.tensor(sequences[batch_idx], dtype=torch.float32).to(device)
+            label_batch = torch.tensor(labels[batch_idx], dtype=torch.float32).to(device)
+            yield input_batch, label_batch
+
+def test_data_generator(data, device):
+    """Returns one batch of data and the label for testing the prediction of the model"""
+    # Randome Index inside the data
+    sample_idx = np.random.randint(SEQ_LEN_PAST, len(data) - SEQ_LEN_FUTURE)
+    sequences = data[sample_idx - SEQ_LEN_PAST:sample_idx]
+    labels_with_date = data[sample_idx-SEQ_LEN_PAST:sample_idx + SEQ_LEN_FUTURE]
+    sequences = sequences.drop(columns=["Date"])  # Exclude the Date column
+    sequences = sequences.apply(pd.to_numeric, errors='coerce').dropna()  # Ensure numeric and drop NaNs
+    sequences = sequences.values
+    input_batch = torch.tensor(sequences, dtype=torch.float32).to(device)
+    return input_batch, labels_with_date
+
+
 
 # Plotting
 def plot_loss(train_loss, val_loss, save_path):
@@ -60,6 +77,8 @@ def plot_seq(data_seq: pd.DataFrame, prediction, save_path: str, save_name: str 
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
+    #print(data_seq["Close"])
+
     data_seq.loc[:, "Date"] = pd.to_datetime(data_seq["Date"], errors="coerce")
     data_seq.set_index("Date", inplace=True)
 
@@ -69,8 +88,34 @@ def plot_seq(data_seq: pd.DataFrame, prediction, save_path: str, save_name: str 
 
     plt.figure(figsize=(12, 6))
     plt.plot(data_seq.index, data_seq['Close'], label="Ground Truth", color="blue")
-    plt.plot(data_seq.index[-len(prediction):], prediction, label="Prediction", color="red", linestyle="--")
+    
+    # Prediction shape (3, 6), I only need the closing price right now. The values are: Open,High,Low,Close,Adj Close,Volume.
+    # It missis the date, so I will just add the date from the data_seq (it always the next possible date (monday-friday))
+    last_date = data_seq.index[-1]
+    next_three_date = []
+
+    # check if next date is saturday or sunday
+    for i in range(1, 4):
+        next_date = last_date + pd.DateOffset(days=i)
+        if next_date.weekday() == 5:
+            next_date = next_date + pd.DateOffset(days=2)
+        elif next_date.weekday() == 6:
+            next_date = next_date + pd.DateOffset(days=1)
+        next_three_date.append(next_date)
+    
+    # create a df with the date and the prediction
+    prediction_df = pd.DataFrame(prediction, columns=["Open", "High", "Low", "Close", "Adj Close", "Volume"])
+    prediction_df["Date"] = next_three_date
+
+    #print("\n\n\n\n")
+    #print(prediction_df)
+    #print("\n\n\n\n")
+
+    # Plot the prediction
+    plt.plot(prediction_df["Date"], prediction_df['Close'], label="Prediction", color="red")
+
     plt.xticks(first_month_dates, first_month_dates.strftime('%Y-%m-%d'), rotation=90)
+    
     plt.ylabel("Close Price")
     plt.legend()
     plt.grid()
@@ -99,7 +144,7 @@ class own_MLP(nn.Module):
         self.dropout = nn.Dropout(self.dp)
 
     def forward(self, x):
-        x = x.view(x.size(0), -1)  # Flatten input
+        x = x.reshape(x.size(0), -1)  # Flatten input
         for i in range(len(self.fc_layers) - 1):
             x = self.fc_layers[i](x)
             x = torch.relu(x)
@@ -125,9 +170,9 @@ def train(model, loss_fn, optimizer, device, sequences, labels, raw_data):
         train_gen = data_generator(train_sequences, train_labels, BATCH_SIZE, device)
         train_loss = 0
 
-        for input_batch, label_batch in tqdm(train_gen, desc=f"Epoch {epoch + 1}/{EPOCHS}"):
+        for _ in tqdm(range(STEPS_PER_EPOCH)):
+            input_batch, label_batch = next(train_gen)
             label_batch = label_batch.view(label_batch.size(0), -1)  # Flatten labels
-
             optimizer.zero_grad()
             output = model(input_batch)
             loss = loss_fn(output, label_batch)
@@ -153,21 +198,16 @@ def train(model, loss_fn, optimizer, device, sequences, labels, raw_data):
 
         print(f"Epoch {epoch + 1}/{EPOCHS} - Train Loss: {train_loss:.4f} - Validation Loss: {val_loss:.4f}")
 
-        # Plot a randome sample of the raw data and the prediction
-        sample_idx = np.random.randint(SEQ_LEN_PAST, len(raw_data) - SEQ_LEN_FUTURE)
+        # Test the model
+        test_seq, label_with_date = test_data_generator(raw_data, device)
+        #print("======", test_seq.shape) # (200, 6) => wrong shape it should be (BATCH_SIZE, 200, 6)
+        #print("======", label_with_date.shape) # (203, 7) => right
+        test_seq = test_seq.unsqueeze(0) # Add batch dimension
+        prediction = model(test_seq).detach().cpu().numpy().reshape(-1, NUM_INPUTS)
 
-        test_input = raw_data.iloc[sample_idx-SEQ_LEN_PAST:sample_idx+SEQ_LEN_FUTURE]
-        #drop the date column
-        test_labels = test_input.copy()
-        test_input = test_input.iloc[:-SEQ_LEN_FUTURE]
-        test_input = test_input.drop(columns=["Date"])
-        test_input = torch.tensor(test_input.values, dtype=torch.float32).to(device)
+        #print(prediction.shape)
 
-        print("\n\n\n test_input: ", test_input.shape)
-
-        prediction = model(test_input).cpu().detach().numpy()
-
-        plot_seq(test_labels, prediction, "./plots", f"pred_epoch_{epoch}.png")
+        plot_seq(label_with_date, prediction, "./plots", f"pred_epoch_{epoch}.png")
 
 
     # Plot loss curves
@@ -184,6 +224,8 @@ def main():
     raw_opt_data = raw_opt_data.apply(pd.to_numeric, errors='coerce').dropna()  # Ensure numeric and drop NaNs
 
     sequences, labels = prepare_sequences(raw_opt_data, SEQ_LEN_PAST, SEQ_LEN_FUTURE)
+
+    print("\n\n\n", len(sequences))
 
     # Initialize model, loss, and optimizer
     model = own_MLP(layer=[256, 128, 64]).to(device)
