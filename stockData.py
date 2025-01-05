@@ -8,13 +8,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-
+DATA_NAME = "APPL"
 DATA_PATH = "./data/AAPL.csv"
-SEQ_LEN_PAST = 64
+SEQ_LEN_PAST = 16
 SEQ_LEN_FUTURE = 3
 BATCH_SIZE = 64
-EPOCHS = 500
-STEPS_PER_EPOCH = 500
+EPOCHS = 100
+STEPS_PER_EPOCH = 10
 
 NUM_INPUTS = 7 - 6
 
@@ -52,7 +52,7 @@ def plot_loss(train_loss, val_loss, save_path):
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    plt.savefig(os.path.join(save_path, "loss_curve.png"))
+    plt.savefig(os.path.join(save_path, f"loss_curve.png"))
     plt.close()
 
 
@@ -110,8 +110,8 @@ class own_MLP(nn.Module):
 class own_LSTM(nn.Module):
     def __init__(self):
         super(own_LSTM, self).__init__()
-        hidden_size = 256
-        self.lstm = nn.LSTM(NUM_INPUTS * SEQ_LEN_PAST, hidden_size, 3, batch_first=True, dropout=DP)
+        hidden_size = 64
+        self.lstm = nn.LSTM(NUM_INPUTS * SEQ_LEN_PAST, hidden_size, 1, batch_first=True, dropout=DP)
         self.fc = nn.Linear(hidden_size, SEQ_LEN_FUTURE * NUM_INPUTS)
 
     def forward(self, x):
@@ -169,7 +169,7 @@ def train(model, loss_fn, optimizer, schedular, device, data, val_data, raw_data
             schedular.step()
 
         print(f"Epoch {epoch + 1}/{EPOCHS} - Train Loss: {train_loss / STEPS_PER_EPOCH:.4f} - Validation Loss: {val_loss / STEPS_PER_EPOCH:.4f}")
-        plot_loss(train_loss_history, val_loss_history, f"./losses/{type(model).__name__}")
+        plot_loss(train_loss_history, val_loss_history, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/loss/")
 
         with torch.no_grad():
             # Select a random sequence for prediction
@@ -184,7 +184,7 @@ def train(model, loss_fn, optimizer, schedular, device, data, val_data, raw_data
             ground_truth = future_df[CHOOSEN_COLUMN].values
             future_dates = future_df["Date"]
 
-            plot_prediction(raw_sample_input, ground_truth, prediction, future_dates, f"./predictions/{type(model).__name__}", epoch + 1)
+            plot_prediction(raw_sample_input, ground_truth, prediction, future_dates, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/", epoch + 1)
 
 def drop_columns(data):
     possible_col = ["Date","Open","High","Low", "Close","Adj Close","Volume"]
@@ -198,7 +198,7 @@ def main():
     #print(type(raw_data[CHOOSEN_COLUMN][0]))
 
     # reduce noise
-    raw_data = raw_data[:6000]
+    raw_data = raw_data[:1000]
 
     data = drop_columns(raw_data)
 
@@ -209,6 +209,12 @@ def main():
     train_data = data.iloc[:int(len(data) * split_pct)]
     val_data = data.iloc[int(len(data) * split_pct):]
 
+    if len(val_data) < SEQ_LEN_PAST + SEQ_LEN_FUTURE:
+        raise ValueError("Validation data is too small for the specified sequence lengths.")
+    
+    if len(data) <= SEQ_LEN_PAST + SEQ_LEN_FUTURE:
+     raise ValueError("Data size is too small for the sequence length configuration.")
+
     model = own_MLP().to(device)
     # model = own_LSTM().to(device)
     # model = own_transformer().to(device)
@@ -216,9 +222,19 @@ def main():
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)
 
+    train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
 
+    model = own_LSTM().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+    
+    train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
+    
+    model = own_transformer().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+    
     train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
 
     # MAYBE?: Avg prediction from all models?
