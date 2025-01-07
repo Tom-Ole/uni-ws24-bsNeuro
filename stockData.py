@@ -8,11 +8,11 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-DATA_NAME = "APPL"
-DATA_PATH = "./data/AAPL.csv"
+DATA_NAME = "GOOGL"
+DATA_PATH = "./data/GOOGL.csv"
 SEQ_LEN_PAST = 16
 SEQ_LEN_FUTURE = 3
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 EPOCHS = 100
 STEPS_PER_EPOCH = 10
 
@@ -54,7 +54,6 @@ def plot_loss(train_loss, val_loss, save_path):
 
     plt.savefig(os.path.join(save_path, f"loss_curve.png"))
     plt.close()
-
 
 def plot_prediction(input_data, ground_truth, prediction, future_dates, save_path, epoch):
     """Plots the prediction and corresponding ground truth dynamically based on random input."""
@@ -110,8 +109,8 @@ class own_MLP(nn.Module):
 class own_LSTM(nn.Module):
     def __init__(self):
         super(own_LSTM, self).__init__()
-        hidden_size = 64
-        self.lstm = nn.LSTM(NUM_INPUTS * SEQ_LEN_PAST, hidden_size, 1, batch_first=True, dropout=DP)
+        hidden_size = 128
+        self.lstm = nn.LSTM(NUM_INPUTS * SEQ_LEN_PAST, hidden_size, 3, batch_first=True, dropout=DP)
         self.fc = nn.Linear(hidden_size, SEQ_LEN_FUTURE * NUM_INPUTS)
 
     def forward(self, x):
@@ -131,6 +130,7 @@ class own_transformer(nn.Module):
         x = self.transformer(x)
         x = self.fc(x)
         return x
+
 
 def train(model, loss_fn, optimizer, schedular, device, data, val_data, raw_data):
     train_loss_history = []
@@ -191,6 +191,19 @@ def drop_columns(data):
     possible_col.remove(CHOOSEN_COLUMN)
     return data.drop(columns=possible_col)
 
+def train_all(device, train_data, val_data, raw_data):
+
+    models = [own_MLP, own_LSTM, own_transformer]
+
+    for model in models:
+        model = model().to(device)
+        loss_fn = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+
+        train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
+
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -215,29 +228,20 @@ def main():
     if len(data) <= SEQ_LEN_PAST + SEQ_LEN_FUTURE:
      raise ValueError("Data size is too small for the sequence length configuration.")
 
-    model = own_MLP().to(device)
-    # model = own_LSTM().to(device)
+    # model = own_MLP().to(device)
+    model = own_LSTM().to(device)
     # model = own_transformer().to(device)
 
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
-    train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
+    #train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
 
-    model = own_LSTM().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-    
-    train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
-    
-    model = own_transformer().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-    
-    train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
+    train_all(device, train_data, val_data, raw_data)
 
-    # MAYBE?: Avg prediction from all models?
+
+
 
 if __name__ == "__main__":
     main()
