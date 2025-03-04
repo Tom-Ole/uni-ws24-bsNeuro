@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 
 DATA_NAME = "AAPL"
 DATA_PATH = "./data/AAPL.csv"
-SEQ_LEN_PAST = 128
+SEQ_LEN_PAST = 16
 SEQ_LEN_FUTURE = 3
 BATCH_SIZE = 64
 EPOCHS = 50
@@ -23,6 +23,8 @@ CHOOSEN_COLUMN = "Close"
 LAYERS = [64, 128, 64] 
 DP = 0.5
 LR = 5e-4
+
+WEEKLY = True
 
 def read_data(file_path: str) -> pd.DataFrame:
     return pd.read_csv(file_path)
@@ -57,7 +59,6 @@ def plot_loss(train_loss, val_loss, save_path):
 
 def plot_prediction(input_data, ground_truth, prediction, future_dates, save_path, epoch):
     """Plots the prediction and corresponding ground truth dynamically based on random input."""
-
     input_data = input_data.copy()
     input_data["Date"] = pd.to_datetime(input_data["Date"], errors="coerce")
     input_data.set_index("Date", inplace=True)
@@ -71,6 +72,36 @@ def plot_prediction(input_data, ground_truth, prediction, future_dates, save_pat
     plt.plot(future_dates, prediction[:, 0], label="Prediction", color="red")
     plt.scatter(future_dates, prediction[:, 0], label="Prediction", color="orange")
     # plt.plot(future_dates, prediction[:, 3], label="Prediction", color="red")
+    plt.xlabel("Date")
+    plt.ylabel("Close Price")
+    plt.title(f"Prediction vs Ground Truth (Epoch {epoch})")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+
+    plt.savefig(os.path.join(save_path, f"prediction_epoch_{epoch}.png"))
+    plt.close()
+
+def plot_weekly_prediction(input_data: pd.DataFrame, ground_truth: pd.DataFrame, prediction, save_path, epoch):
+    
+    input_data.drop(CHOOSEN_COLUMN, axis=1, inplace=True)
+    input_data = input_data.rename(columns={"Percentage_Change": CHOOSEN_COLUMN})
+
+    ground_truth.drop(CHOOSEN_COLUMN, axis=1, inplace=True)
+    ground_truth = ground_truth.rename(columns={"Percentage_Change": CHOOSEN_COLUMN})
+
+    input_data = input_data.copy()
+    input_data["Date"] = pd.to_datetime(input_data["Date"], errors="coerce")
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(input_data["Date"], input_data[CHOOSEN_COLUMN], label="Input Data", color="blue", alpha=0.5)
+    plt.plot(ground_truth["Date"], ground_truth[CHOOSEN_COLUMN], label="Ground Truth", color="green", linestyle
+    ="dashed")
+    plt.plot(ground_truth["Date"], prediction[:, 0], label="Prediction", color="red")
+    plt.scatter(ground_truth["Date"], prediction[:, 0], label="Prediction", color="orange")
     plt.xlabel("Date")
     plt.ylabel("Close Price")
     plt.title(f"Prediction vs Ground Truth (Epoch {epoch})")
@@ -230,44 +261,53 @@ def train(model, loss_fn, optimizer, schedular, device, data, val_data, raw_data
             schedular.step()
 
         print(f"Epoch {epoch + 1}/{EPOCHS} - Train Loss: {train_loss / STEPS_PER_EPOCH:.4f} - Validation Loss: {val_loss / STEPS_PER_EPOCH:.4f}")
-        plot_loss(train_loss_history, val_loss_history, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/loss/")
+        plot_loss(train_loss_history, val_loss_history, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/")
 
 
     save_history_to_csv(train_loss_history, val_loss_history, mae_history, mape_history, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/")
 
     # Plot prediction with a fixed sequence
-    with torch.no_grad():
-        fixed_index = (len(raw_data) - SEQ_LEN_PAST - SEQ_LEN_FUTURE) // 2
-        raw_sample_input = raw_data.iloc[fixed_index:fixed_index + SEQ_LEN_PAST]
-        sample_input = drop_columns(raw_sample_input).values
-        sample_input = torch.tensor(sample_input, dtype=torch.float32).reshape(1, -1).to(device)
-        prediction = model(sample_input).cpu().numpy().reshape(SEQ_LEN_FUTURE, -1)
+    if not WEEKLY:
+        with torch.no_grad():
+            fixed_index = (len(raw_data) - SEQ_LEN_PAST - SEQ_LEN_FUTURE) // 2
+            raw_sample_input = raw_data.iloc[fixed_index:fixed_index + SEQ_LEN_PAST]
+            
+            sample_input = drop_columns(raw_sample_input).values
 
-        future_df = raw_data.iloc[fixed_index + SEQ_LEN_PAST:fixed_index + SEQ_LEN_PAST + SEQ_LEN_FUTURE]
-        ground_truth = future_df[CHOOSEN_COLUMN].values
-        future_dates = future_df["Date"]
+            sample_input = torch.tensor(sample_input, dtype=torch.float32).reshape(1, -1).to(device)
+            prediction = model(sample_input).cpu().numpy().reshape(SEQ_LEN_FUTURE, -1)
 
-        plot_prediction(raw_sample_input, ground_truth, prediction, future_dates, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/", epoch + 1)
+            future_df = raw_data.iloc[fixed_index + SEQ_LEN_PAST:fixed_index + SEQ_LEN_PAST + SEQ_LEN_FUTURE]
+            ground_truth = future_df[CHOOSEN_COLUMN].values
+            future_dates = future_df["Date"]
 
-    # Plot prediction for a random sequence
-    # with torch.no_grad():
-    #     # Select a random sequence for prediction
-    #     random_index = np.random.randint(SEQ_LEN_PAST, len(raw_data) - SEQ_LEN_FUTURE)
-    #     raw_sample_input = raw_data.iloc[random_index - SEQ_LEN_PAST:random_index]
-    #     sample_input = drop_columns(raw_sample_input).values
-    #     sample_input = torch.tensor(sample_input, dtype=torch.float32).reshape(1, -1).to(device)
-    #     prediction = model(sample_input).cpu().numpy().reshape(SEQ_LEN_FUTURE, -1)
+            plot_prediction(raw_sample_input, ground_truth, prediction, future_dates, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/", epoch + 1)
+    else:
+        with torch.no_grad():
+            fixed_index = (len(raw_data) - SEQ_LEN_PAST - SEQ_LEN_FUTURE) // 2
+            raw_sample_input = raw_data.iloc[fixed_index:fixed_index + SEQ_LEN_PAST]
 
-    #     # Ground truth for plotting
-    #     future_df = raw_data.iloc[random_index:random_index + SEQ_LEN_FUTURE]
-    #     ground_truth = future_df[CHOOSEN_COLUMN].values
-    #     future_dates = future_df["Date"]
+            # raw_sample_input => Date, Close, Percentage_Change
+            sample_input = raw_sample_input.drop("Date", axis=1)
+            sample_input = sample_input.drop("Close", axis=1)
+            sample_input = sample_input.rename(columns={"Percentage_Change": CHOOSEN_COLUMN})
+            sample_input = sample_input.values
+            sample_input = torch.tensor(sample_input, dtype=torch.float32).reshape(1, -1).to(device)
+            prediction = model(sample_input).cpu().numpy().reshape(SEQ_LEN_FUTURE, -1)
 
-    #     plot_prediction(raw_sample_input, ground_truth, prediction, future_dates, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/", epoch + 1)
+            ground_truth = raw_data.iloc[fixed_index + SEQ_LEN_PAST:fixed_index + SEQ_LEN_PAST + SEQ_LEN_FUTURE]
+            ground_truth.reset_index(drop=True, inplace=True)
+            raw_sample_input.reset_index(drop=True, inplace=True)
+
+            print(ground_truth)
+            print(raw_sample_input)
+
+            plot_weekly_prediction(raw_sample_input, ground_truth, prediction, f"./predictions/{DATA_NAME}/{type(model).__name__}/EP{EPOCHS}_SPE{STEPS_PER_EPOCH}_BS{BATCH_SIZE}_SQP{SEQ_LEN_PAST}/", epoch + 1)
+
 
 
 def drop_columns(data):
-    possible_col = ["Date","Open","High","Low", "Close","Adj Close","Volume"]
+    possible_col = ["Open","High","Low", "Close","Adj Close","Volume"]
     possible_col.remove(CHOOSEN_COLUMN)
     return data.drop(columns=possible_col)
 
@@ -284,18 +324,43 @@ def train_all(device, train_data, val_data, raw_data):
         train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
 
 
+
+def calculate_weekly_change(data: pd.DataFrame, column: str) -> pd.DataFrame:
+    data["Date"] = pd.to_datetime(data["Date"])
+
+    weekly = data.groupby(pd.Grouper(key="Date", freq="ME")).agg({column: "mean"}).reset_index()
+    weekly["Percentage_Change"] = weekly[column].pct_change() * 100
+    weekly["Percentage_Change"] = weekly["Percentage_Change"].fillna(0)
+    weekly["Percentage_Change"] = weekly["Percentage_Change"].round(4)
+
+    return weekly
+
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     raw_data = read_data(DATA_PATH)
 
     # reduce noise
-    raw_data = raw_data[:1000]
+    raw_data = raw_data[:8000]
+    raw_data.reset_index(drop=True, inplace=True)
 
-    data = drop_columns(raw_data)
+    if WEEKLY:
+        data_droped = drop_columns(raw_data)
+        data_with_date = calculate_weekly_change(data_droped, CHOOSEN_COLUMN)
+
+        data = data_with_date.drop("Date", axis=1)
+        data.drop(CHOOSEN_COLUMN, axis=1, inplace=True)
+        data.rename(columns={"Percentage_Change": CHOOSEN_COLUMN}, inplace=True)
+    else:
+        data = drop_columns(raw_data)
+
+    #print(data)
+
 
     scaler = StandardScaler()
     data[[CHOOSEN_COLUMN]] = scaler.fit_transform(data[[CHOOSEN_COLUMN]])
+    
 
     split_pct = 0.8
     train_data = data.iloc[:int(len(data) * split_pct)]
@@ -307,8 +372,8 @@ def main():
     if len(data) <= SEQ_LEN_PAST + SEQ_LEN_FUTURE:
      raise ValueError("Data size is too small for the sequence length configuration.")
 
-    # model = own_MLP().to(device)
-    model = own_conv1d().to(device)
+    model = own_MLP().to(device)
+    # model = own_conv1d().to(device)
     # model = own_LSTM().to(device)
     # model = own_transformer().to(device)
 
@@ -318,7 +383,7 @@ def main():
 
     #train(model, loss_fn, optimizer, scheduler, device, train_data, val_data, raw_data)
 
-    train_all(device, train_data, val_data, raw_data)
+    train_all(device, train_data, val_data, data_with_date)
 
 if __name__ == "__main__":
     main()
