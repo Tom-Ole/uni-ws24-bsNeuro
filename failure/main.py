@@ -9,8 +9,10 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from typing import Tuple
 
-INPUTS_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume", "day", "month", "year"]
-NORMALIZE_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+# INPUTS_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume", "day", "month", "year"]
+INPUTS_COLUMNS = ["Open", "High", "Low", "Close", "day", "month", "year"]
+# NORMALIZE_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+NORMALIZE_COLUMNS = ["Open", "High", "Low", "Close"]
 OUTPUT_COLUMNS = ["Close"]
 INPUT_SIZE = len(INPUTS_COLUMNS)
 OUTPUT_SIZE = len(OUTPUT_COLUMNS)
@@ -32,20 +34,15 @@ def preprocess_data(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Sta
     # add day as 1 - 31 | 30 | 29 | 28
     data["day"] = data["Date"].dt.day
 
-    # add day as 0,1,2,3,4,5,6
-    # data["day"] = data["Date"].dt.dayofweek
-    # maybe sin cos encoding of day
-    # data["sin_day"] = np.sin(2 * np.pi * data["day"] / 6)
-
     # add month, year columns
     data["month"] = data["Date"].dt.month
     data["year"] = data["Date"].dt.year
 
     # drop date column
-    data = data.drop(columns=["Date"])
+    data = data.drop(columns=["Date", "Volume", "Adj Close"])
 
     #only up to year 2021
-    data = data[data["year"] <= 2021]
+    data = data[data["year"] <= 2005]
 
     # normalize the data
     scaler = StandardScaler()
@@ -183,8 +180,10 @@ def predict_future(model: TRANSFORMER | LSTM | CONV1D | MLP, sequence: np.ndarra
             y_pred = model(x)
             # Get the actual value
             y_pred = y_pred.cpu().numpy()
+            
             # Append the prediction to the sequence
             np.append(sequence, y_pred)
+
             # Append the prediction to the list of predictions
             predictions.append(y_pred)
 
@@ -263,7 +262,7 @@ def train(model: TRANSFORMER | LSTM | CONV1D | MLP, loss_fn, optimizer, training
     return train_loss_history, val_loss_history, mae_history, mape_history, predictions
 
 def reverse_transform(data: pd.DataFrame, scaler: StandardScaler) -> pd.DataFrame:
-    data[["Open", "High", "Low", "Close", "Adj Close", "Volume"]] = scaler.inverse_transform(data[["Open", "High", "Low", "Close", "Adj Close", "Volume"]])
+    data[NORMALIZE_COLUMNS] = scaler.inverse_transform(data[NORMALIZE_COLUMNS])
     return data
 
 def reverse_transform_predictions(prediction: np.ndarray, scaler: StandardScaler) -> np.ndarray:
@@ -324,9 +323,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model = MLP().to(device)
+    model = MLP().to(device)
     # model = CONV1D().to(device)
-    model = LSTM().to(device)
+    # model = LSTM().to(device)
     # model = TRANSFORMER().to(device)
 
     loss_fn = nn.MSELoss()

@@ -9,20 +9,20 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from typing import Tuple
 
-CHOOSSEN_ATTR = "High"
-INPUTS_COLUMNS = ["High", "day", "month", "year"]
-NORMALIZE_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
-OUTPUT_COLUMNS = ["High"]
-INPUT_SIZE = len(INPUTS_COLUMNS)
-OUTPUT_SIZE = len(OUTPUT_COLUMNS)
-
-EPOCHS = 3
+EPOCHS = 10
 STEPS_PER_EPOCH = 100
 SEQ_LEN = 32
 PRED_LEN = 5
 BATCH_SIZE = 128
 LR = 5e-4
 DROP_PROB = 0.5
+
+INPUTS_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume", "day", "month", "year"]
+NORMALIZE_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+OUTPUT_COLUMNS = ["Close"]
+INPUT_SIZE = len(INPUTS_COLUMNS)
+OUTPUT_SIZE = len(OUTPUT_COLUMNS) * PRED_LEN
+
 
 # preprocess given data for training a sequential neural network
 # data Columns: Date, Open, High, Low, Close, Adj Close, Volume
@@ -33,12 +33,14 @@ def preprocess_data(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Sta
     # add day as 1 - 31 | 30 | 29 | 28
     data["day"] = data["Date"].dt.day
 
+    # add day as 0,1,2,3,4,5,6
+    # data["day"] = data["Date"].dt.dayofweek
+    # maybe sin cos encoding of day
+    # data["sin_day"] = np.sin(2 * np.pi * data["day"] / 6)
+
     # add month, year columns
     data["month"] = data["Date"].dt.month
     data["year"] = data["Date"].dt.year
-
-    # Keep original date for plotting
-    original_dates = data["Date"].copy()
 
     # drop date column
     data = data.drop(columns=["Date"])
@@ -55,25 +57,19 @@ def preprocess_data(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Sta
     train_data = data.iloc[:int(len(data) * split_pct)]
     val_data = data.iloc[int(len(data) * split_pct):]
 
-    # Store the dates corresponding to the training and validation data
-    train_dates = original_dates[:int(len(data) * split_pct)]
-    val_dates = original_dates[int(len(data) * split_pct):]
-
     return train_data, val_data, scaler
 
 def data_generator(data: pd.DataFrame, seq_len: int, batch_size: int, device: torch.device):
-    # Extract only the columns we want to use as input
-    input_data = data[INPUTS_COLUMNS].to_numpy()
-    
-    n = len(input_data) - seq_len
+    data = data.to_numpy()
+    n = len(data) - seq_len
     output_indices = [INPUTS_COLUMNS.index(col) for col in OUTPUT_COLUMNS]
 
     for i in range(0, n, batch_size):
         x = []
         y = []
         for j in range(min(batch_size, n-i)):
-            x.append(input_data[i+j:i+j+seq_len])
-            y.append(input_data[i+j+seq_len, output_indices])  # Get target for the next timestep after the sequence
+            x.append(data[i+j:i+j+seq_len])
+            y.append(data[i+j+seq_len, output_indices])  # Get target for the next timestep after the sequence
 
         yield torch.tensor(np.array(x), dtype=torch.float32).to(device), \
               torch.tensor(np.array(y), dtype=torch.float32).to(device)
@@ -114,6 +110,7 @@ class CONV1D(nn.Module):
         super(CONV1D, self).__init__()
         self.conv1 = nn.Conv1d(INPUT_SIZE, 64, 3, padding=1)
         self.conv2 = nn.Conv1d(64, 64, 3, padding=1)
+        # self.conv3 = nn.Conv1d(96, 64, 3)
 
         self.gap = nn.AdaptiveAvgPool1d(1)
 
@@ -130,6 +127,8 @@ class CONV1D(nn.Module):
         x = self.dropout(x)
         x = torch.relu(self.conv2(x))
         x = self.dropout(x)
+        # x = torch.relu(self.conv3(x))
+        # x = self.dropout(x)
 
         # Global average pooling across the sequence dimension
         x = self.gap(x)  # Shape: [batch_size, 64, 1]
@@ -157,7 +156,7 @@ class LSTM(nn.Module):
 class TRANSFORMER(nn.Module):
     def __init__(self):
         super(TRANSFORMER, self).__init__()
-        self.transformer = nn.Transformer(d_model=INPUT_SIZE, nhead=2, dropout=DROP_PROB, batch_first=True)
+        self.transformer = nn.Transformer(d_model=INPUT_SIZE, nhead=3, dropout=DROP_PROB, batch_first=True)
         self.fc = nn.Linear(INPUT_SIZE, OUTPUT_SIZE)
 
     def forward(self, x):
@@ -166,67 +165,16 @@ class TRANSFORMER(nn.Module):
         x = self.fc(x[:, -1, :])
         return x
 
-def predict_future(model: TRANSFORMER | LSTM | CONV1D | MLP, sequence: np.ndarray, full_data: pd.DataFrame, device):
-    """
-    Predict future values based on the given sequence.
-    
-    Args:
-        model: The trained model
-        sequence: Input sequence containing only the INPUTS_COLUMNS
-        full_data: The full DataFrame containing all columns to copy other attributes
-        device: The compute device
-        
-    Returns:
-        Array of predicted values
-    """
-    current_sequence = sequence.copy()
-    predictions = []
-    # Get the last row from the full data to use for non-predicted columns
-    last_full_row = full_data.iloc[-1].copy()
-    
+def predict_future(model: TRANSFORMER | LSTM | CONV1D | MLP, sequence: np.ndarray, device):
     with torch.no_grad():
-        # Predict PRED_LEN steps into the future
-        for i in range(PRED_LEN):
-            # Use last SEQ_LEN elements of the current sequence
-            input_seq = current_sequence[-SEQ_LEN:]
-            
-            # Convert to tensor and add batch dimension
-            x = torch.tensor(input_seq, dtype=torch.float32).unsqueeze(0).to(device)
-            
-            # Get prediction for Close price
-            y_pred = model(x).cpu().numpy()[0]
-            
-            # Create a new row with the predicted values
-            new_row = np.zeros(current_sequence.shape[1])
-            
-            # Set predicted Close value
-            close_idx = INPUTS_COLUMNS.index(CHOOSSEN_ATTR)
-            new_row[close_idx] = y_pred[0]
-            
-            # Set time features (day/month/year)
-            day_idx = INPUTS_COLUMNS.index("day")
-            month_idx = INPUTS_COLUMNS.index("month")
-            year_idx = INPUTS_COLUMNS.index("year")
-            
-            # Increment the date (simplified approach)
-            new_row[day_idx] = (current_sequence[-1, day_idx] + 1) % 31
-            if new_row[day_idx] == 0:
-                new_row[day_idx] = 1
-                new_row[month_idx] = (current_sequence[-1, month_idx] + 1) % 13
-                if new_row[month_idx] == 0:
-                    new_row[month_idx] = 1
-                    new_row[year_idx] = current_sequence[-1, year_idx] + 1
-                else:
-                    new_row[year_idx] = current_sequence[-1, year_idx]
-            else:
-                new_row[month_idx] = current_sequence[-1, month_idx]
-                new_row[year_idx] = current_sequence[-1, year_idx]
-            
-            # Append to sequence and save prediction
-            current_sequence = np.vstack([current_sequence, new_row])
-            predictions.append(y_pred[0])
-
-    return np.array(predictions)
+        # Ensure sequence length never exceeds SEQ_LEN
+        sequence = sequence[-SEQ_LEN:]
+        # Convert the sequence to a tensor and add a batch dimension
+        x = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0).to(device)
+        # Get the model's prediction
+        pred = model(x).cpu().numpy()
+        
+    return pred
 
 # Trains the given model with the given data
 def train(model: TRANSFORMER | LSTM | CONV1D | MLP, loss_fn, optimizer, trainings_data, validation_data, sequence, device):
@@ -292,16 +240,15 @@ def train(model: TRANSFORMER | LSTM | CONV1D | MLP, loss_fn, optimizer, training
 
         print(f"Epoch {epoch + 1}/{EPOCHS}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, MAE: {train_mae:.4f}, MAPE: {train_mape:.4f}")
 
-    # Get only the input features columns from the sequence
-    input_sequence = sequence[INPUTS_COLUMNS].values
-    
+
     # Make predictions
-    predictions = predict_future(model, input_sequence, sequence, device)
+    predictions = predict_future(model, sequence, device)
+
 
     return train_loss_history, val_loss_history, mae_history, mape_history, predictions
 
 def reverse_transform(data: pd.DataFrame, scaler: StandardScaler) -> pd.DataFrame:
-    data[NORMALIZE_COLUMNS] = scaler.inverse_transform(data[NORMALIZE_COLUMNS])
+    data[["Open", "High", "Low", "Close", "Adj Close", "Volume"]] = scaler.inverse_transform(data[["Open", "High", "Low", "Close", "Adj Close", "Volume"]])
     return data
 
 def reverse_transform_predictions(prediction: np.ndarray, scaler: StandardScaler) -> np.ndarray:
@@ -335,12 +282,8 @@ def save_predictions(sequence, predictions, path: str):
 
 def save_loss(train_loss, val_loss, path: str):
     # Plot the loss and metrics
-    plt.figure(figsize=(10, 6))
     plt.plot(train_loss, label="Train Loss")
     plt.plot(val_loss, label="Val Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training and Validation Loss")
     plt.tight_layout()
     plt.legend()
     plt.savefig(path + "loss.png")
@@ -348,12 +291,8 @@ def save_loss(train_loss, val_loss, path: str):
 
 def save_metrics(mae, mape, path: str):
     # Plot the metrics
-    plt.figure(figsize=(10, 6))
     plt.plot(mae, label="Mean Absolute Error")
     plt.plot(mape, label="Mean Absolute Percentage Error")
-    plt.xlabel("Epoch")
-    plt.ylabel("Error")
-    plt.title("Training Metrics")
     plt.tight_layout()
     plt.legend()
     plt.savefig(path + "metrics.png")
@@ -370,33 +309,32 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Select one of the model types
-    # model = MLP().to(device)
+    model = MLP().to(device)
     # model = CONV1D().to(device)
-    model = LSTM().to(device)
+    # model = LSTM().to(device)
     # model = TRANSFORMER().to(device)
 
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
-    # The sequence the model should predict the future of
-    sequence = train_data[-SEQ_LEN-PRED_LEN:]
+    # The sequence the model should Predict the future of.
+    # Needs to be len of SEQ_LEN + PRED_LEN
+    sequence = train_data[-SEQ_LEN:]
 
-    train_loss_history, val_loss_history, mae_history, mape_history, predictions = train(
-        model, loss_fn, optimizer, train_data, val_data, sequence, device
-    )
+    train_loss_history, val_loss_history, mae_history, mape_history, predictions = train(model, loss_fn, optimizer, train_data, val_data, sequence.values, device)
 
-    # Inverse the normalization of sequence and predictions
+    # Inverse the normalization of sequence and predictions:
     sequence = reverse_transform(sequence, scaler)
     predictions = reverse_transform_predictions(predictions, scaler)
 
-    # Change this to the model type you're using
-    folder_name = model.__class__.__name__.lower()
+    folder_name = "MLP"
 
-    check_folder(f"resultsSingelAttr/{folder_name}")
-    save_loss(train_loss_history, val_loss_history, f"resultsSingelAttr/{folder_name}/")
-    save_metrics(mae_history, mape_history, f"resultsSingelAttr/{folder_name}/")
-    save_predictions(sequence, predictions, f"resultsSingelAttr/{folder_name}/")
+    check_folder(f"results/{folder_name}")
+    save_loss(train_loss_history, val_loss_history, f"results/{folder_name}/")
+    save_metrics(mae_history, mape_history, f"results/{folder_name}/")
+    save_predictions(sequence, predictions, f"results/{folder_name}/")
+
+
 
 if __name__ == "__main__":
     main()
